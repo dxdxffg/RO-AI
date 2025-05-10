@@ -1,0 +1,42 @@
+from flask import Flask, render_template, redirect, url_for, request, jsonify
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+import traceback
+
+app = Flask(__name__)
+
+# 모델 준비 (CPU 전용 예시)
+tokenizer = AutoTokenizer.from_pretrained("skt/kogpt2-base-v2")
+model = AutoModelForCausalLM.from_pretrained("skt/kogpt2-base-v2").to("cpu")
+
+@app.before_request
+def collect_ip():
+    user_ip = request.remote_addr
+    print(f"[INFO] 접속 IP: {user_ip} → 접속 시 IP 수집에 동의한 것으로 간주됩니다. \n (딕시입니다 웹 사이트에 접속하시면 어쩔 수 없이 ip 정보를 수집하게 됩니다)")
+
+@app.route('/')
+def index():
+    return redirect(url_for('chat', model_name='humanity-v1.0'))
+
+@app.route('/chat/<model_name>', methods=['GET', 'POST'])
+def chat(model_name):
+    if request.method == 'POST':
+        user_input = request.json['message']
+        try:
+            inputs = tokenizer(user_input, return_tensors="pt").to("cpu")
+            with torch.no_grad():
+                outputs = model.generate(
+                    input_ids=inputs["input_ids"],
+                    max_length=15,
+                    num_return_sequences=1,
+                    pad_token_id=tokenizer.eos_token_id
+                )
+            reply = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+            return jsonify({'response': reply})
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({'response': '모르겠다'})
+    return render_template('chat.html', model_name=model_name)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
