@@ -2,32 +2,56 @@ from flask import Flask, render_template, redirect, url_for, request, jsonify
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 import traceback
+import time
 
 app = Flask(__name__)
+app.secret_key = 'SECRET_KEY'
 
-# 모델 준비 (CPU 전용 예시)
+# 모델 준비 (한 번만 로드)
 tokenizer = AutoTokenizer.from_pretrained("skt/kogpt2-base-v2")
-model = AutoModelForCausalLM.from_pretrained("skt/kogpt2-base-v2").to("cpu")
+model = AutoModelForCausalLM.from_pretrained("skt/kogpt2-base-v2")
+
+# IP별 마지막 요청 시간 저장용
+last_request_times = {}
 
 @app.before_request
 def collect_ip():
     user_ip = request.remote_addr
-    print(f"[INFO] 접속 IP: {user_ip} → 접속 시 IP 수집에 동의한 것으로 간주됩니다. \n (딕시입니다 웹 사이트에 접속하시면 어쩔 수 없이 ip 정보를 수집하게 됩니다)")
+    print(f"[INFO] 접속 IP: {user_ip} → 접속 시 IP 수집에 동의한 것으로 간주됩니다.")
 
 @app.route('/')
 def index():
-    return redirect(url_for('chat', model_name='humanity-v1.0'))
+    return redirect(url_for('chat', model_name='cpu'))
 
 @app.route('/chat/<model_name>', methods=['GET', 'POST'])
 def chat(model_name):
+    user_ip = request.remote_addr
+    now = time.time()
+    last_time = last_request_times.get((user_ip, model_name), 0)
+
+    # 모드별 대기 시간
+    if model_name == 'gpu':
+        wait_limit = 20
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        wait_limit = 10
+        device = torch.device("cpu")
+
+    if now - last_time < wait_limit:
+        wait_time = int(wait_limit - (now - last_time))
+        return jsonify({'response': f'⏳ {wait_time}초 후에 질문해주세요. ({model_name.upper()})'})
+
+    last_request_times[(user_ip, model_name)] = now
+
     if request.method == 'POST':
         user_input = request.json['message']
         try:
-            inputs = tokenizer(user_input, return_tensors="pt").to("cpu")
+            inputs = tokenizer(user_input, return_tensors="pt").to(device)
+            model.to(device)
             with torch.no_grad():
                 outputs = model.generate(
                     input_ids=inputs["input_ids"],
-                    max_length=15,
+                    max_length=1000,
                     num_return_sequences=1,
                     pad_token_id=tokenizer.eos_token_id
                 )
